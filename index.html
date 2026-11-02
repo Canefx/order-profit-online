@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>订单盈利核算（线上版）</title>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Microsoft YaHei", Arial, sans-serif; background: #f4f6f8; color: #222; font-size: 14px; }
+  header { background: #2d3e50; color: #fff; padding: 12px 20px; font-size: 18px; }
+  nav { background: #fff; border-bottom: 1px solid #ddd; padding: 0 12px; display: flex; flex-wrap: wrap; }
+  nav button { border: none; background: none; padding: 12px 16px; cursor: pointer; font-size: 14px; border-bottom: 3px solid transparent; }
+  nav button.active { border-bottom-color: #2d7ff9; color: #2d7ff9; font-weight: bold; }
+  main { padding: 16px 20px; }
+  section { display: none; }
+  section.active { display: block; }
+  .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+  input, select, button.btn { padding: 6px 10px; border: 1px solid #bbb; border-radius: 4px; font-size: 14px; }
+  button.btn { background: #2d7ff9; color: #fff; border-color: #2d7ff9; cursor: pointer; }
+  button.btn.gray { background: #fff; color: #333; border-color: #bbb; }
+  button.btn.red { background: #e5484d; border-color: #e5484d; }
+  button.btn.small { padding: 2px 8px; font-size: 12px; }
+  table { border-collapse: collapse; width: 100%; background: #fff; }
+  th, td { border: 1px solid #e3e3e3; padding: 5px 8px; text-align: left; white-space: nowrap; }
+  th { background: #eef2f7; position: sticky; top: 0; }
+  .wrap { overflow: auto; max-height: 70vh; border: 1px solid #ddd; }
+  .muted { color: #888; font-size: 12px; }
+  .warn { background: #fff4e5; border: 1px solid #ffb74d; padding: 8px 12px; margin: 10px 0; border-radius: 4px; }
+  .num { text-align: right; }
+  .total td { font-weight: bold; background: #fafafa; }
+  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.35); display: none; align-items: center; justify-content: center; }
+  .modal-bg.show { display: flex; }
+  .modal { background: #fff; padding: 18px; border-radius: 6px; width: 620px; max-width: 95vw; max-height: 90vh; overflow: auto; }
+  .card { background: #fff; padding: 14px; border-radius: 6px; margin-bottom: 14px; }
+  .pos { color: #1a8f3a; } .neg { color: #d33; }
+  label { margin-right: 6px; }
+</style>
+</head>
+<body>
+<header>订单盈利核算（线上版）</header>
+<nav>
+  <button data-tab="cost" class="active">成本</button>
+  <button data-tab="orders">订单</button>
+  <button data-tab="promo">推广</button>
+  <button data-tab="profit">盈亏</button>
+  <button data-tab="settings">设置 / 备份</button>
+</nav>
+<main>
+
+<!-- 成本 -->
+<section id="cost" class="active">
+  <div class="bar">
+    <input id="costSearch" placeholder="搜索 SKU / 名称" size="24">
+    <button class="btn" id="costAdd">新增 SKU</button>
+    <span class="muted">扣点项可在每个 SKU 的「编辑」中增删改。</span>
+  </div>
+  <div class="wrap">
+    <table>
+      <thead><tr><th>SKU</th><th>商品名称</th><th class="num">单位成本(元)</th><th>扣点项</th><th>操作</th></tr></thead>
+      <tbody id="costBody"></tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 订单 -->
+<section id="orders">
+  <div class="bar">
+    <input type="file" id="orderFile" accept=".csv">
+    <button class="btn" id="orderImport">导入订单 CSV</button>
+    <input id="orderSearch" placeholder="搜索订单号 / 商品 / 状态" size="28">
+    <button class="btn gray" id="colBtn">列管理</button>
+    <span class="muted" id="orderInfo"></span>
+  </div>
+  <div id="colPanel" class="card" style="display:none"></div>
+  <div class="wrap">
+    <table>
+      <thead id="orderHead"></thead>
+      <tbody id="orderBody"></tbody>
+    </table>
+  </div>
+  <p class="muted">仅显示前 300 行，搜索可缩小范围。</p>
+</section>
+
+<!-- 推广 -->
+<section id="promo">
+  <div class="bar">
+    <input type="file" id="promoFile" accept=".xlsx,.xls,.csv">
+    <button class="btn" id="promoImport">导入推广表</button>
+    <button class="btn red" id="promoClear">清空推广数据</button>
+    <span class="muted">按「日期」和「总花费(元)」列汇总，同一天多次导入会覆盖该天数据。</span>
+  </div>
+  <div class="wrap">
+    <table>
+      <thead><tr><th>日期</th><th>商品ID</th><th class="num">总花费(元)</th><th>来源</th><th>操作</th></tr></thead>
+      <tbody id="promoBody"></tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 盈亏 -->
+<section id="profit">
+  <div class="bar">
+    <label>开始日期 <input type="date" id="pStart"></label>
+    <label>结束日期 <input type="date" id="pEnd"></label>
+    <button class="btn" id="pQuery">查询</button>
+    <button class="btn gray" id="pToday">单日：开始日期 = 结束日期</button>
+  </div>
+  <div id="pWarn"></div>
+  <div class="card" id="pSummary"></div>
+  <div class="wrap">
+    <table>
+      <thead><tr>
+        <th>日期</th><th class="num">订单数</th><th class="num">销售额(实收)</th><th class="num">扣点</th>
+        <th class="num">商品成本</th><th class="num">退款准备+税</th><th class="num">推广花费</th><th class="num">净利润</th>
+      </tr></thead>
+      <tbody id="profitBody"></tbody>
+    </table>
+  </div>
+  <p class="muted">利润 = 结算金额 − 商品成本 − 退款准备 − 税 − 推广花费；结算金额 = 商家实收 × (1 − 扣点合计)。</p>
+</section>
+
+<!-- 设置 -->
+<section id="settings">
+  <div class="card">
+    <h3>计算参数</h3>
+    <label>退款准备率 % <input type="number" step="0.01" id="setRefund" style="width:90px"></label>
+    <label>税率 % <input type="number" step="0.01" id="setTax" style="width:90px"></label>
+    <button class="btn" id="setSave">保存</button>
+  </div>
+  <div class="card">
+    <h3>数据备份</h3>
+    <p class="muted">数据保存在本浏览器中（IndexedDB）。更换浏览器或电脑前请先导出备份，再到新环境导入。</p>
+    <button class="btn" id="exportBtn">导出备份(JSON)</button>
+    <input type="file" id="importBackup" accept=".json">
+    <button class="btn red" id="clearAll">清空全部数据</button>
+  </div>
+</section>
+
+</main>
+
+<!-- 模态框：编辑 SKU -->
+<div class="modal-bg" id="costModal">
+  <div class="modal">
+    <h3 id="mTitle">编辑 SKU</h3>
+    <div class="bar"><label>SKU <input id="mSku" size="22"></label></div>
+    <div class="bar"><label>商品名称 <input id="mName" size="36"></label></div>
+    <div class="bar"><label>单位成本(元) <input id="mCost" type="number" step="0.01" size="10"></label></div>
+    <h4>扣点项（合计作为扣点率）</h4>
+    <table>
+      <thead><tr><th>扣点名称</th><th class="num">比例 %</th><th></th></tr></thead>
+      <tbody id="mDed"></tbody>
+    </table>
+    <div class="bar" style="margin-top:8px">
+      <input id="dName" placeholder="扣点名称，如 平台佣金">
+      <input id="dRate" type="number" step="0.001" placeholder="比例 %" style="width:110px">
+      <button class="btn small" id="dAdd">添加扣点项</button>
+    </div>
+    <div class="bar" style="justify-content:flex-end">
+      <span class="muted" id="mTotal"></span>
+      <button class="btn gray" id="mCancel">取消</button>
+      <button class="btn" id="mSave">保存</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ---------- IndexedDB 存储 ----------
+const DB_NAME = 'order-profit', STORE = 'kv';
+function openDb() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open(DB_NAME, 1);
+    r.onupgradeneeded = () => r.result.createObjectStore(STORE);
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+let dbp = null;
+async function kvGet(k, def) {
+  dbp = dbp || await openDb();
+  return new Promise(res => {
+    const q = dbp.transaction(STORE).objectStore(STORE).get(k);
+    q.onsuccess = () => res(q.result ?? def);
+  });
+}
+async function kvSet(k, v) {
+  dbp = dbp || await openDb();
+  return new Promise(res => {
+    const tx = dbp.transaction(STORE, 'readwrite');
+    tx.objectStore(STORE).put(v, k);
+    tx.oncomplete = () => res();
+  });
+}
+
+// ---------- 状态 ----------
+const S = { costs: {}, orders: {}, promo: {}, settings: { refund: 1, tax: 1 }, hiddenCols: [], orderCols: [] };
+async function loadAll() {
+  S.costs = await kvGet('costs', {});
+  S.orders = await kvGet('orders', {});
+  S.promo = await kvGet('promo', {});
+  S.settings = await kvGet('settings', { refund: 1, tax: 1 });
+  S.hiddenCols = await kvGet('hiddenCols', []);
+  S.orderCols = await kvGet('orderCols', []);
+}
+const saveCosts = () => kvSet('costs', S.costs);
+const saveOrders = () => kvSet('orders', S.orders);
+const savePromo = () => kvSet('promo', S.promo);
+const saveSettings = () => kvSet('settings', S.settings);
+const saveCols = () => kvSet('hiddenCols', S.hiddenCols);
+
+// ---------- 工具 ----------
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+const n = v => { const x = parseFloat(String(v ?? '').replace(/[,\s%]/g, '')); return isNaN(x) ? 0 : x; };
+const money = v => (Math.round(v * 100) / 100).toFixed(2);
+const cls = v => v > 0 ? 'pos' : (v < 0 ? 'neg' : '');
+
+function toast(msg) { alert(msg); }
+
+// CSV 解析（支持引号）
+function parseCsv(text) {
+  const rows = []; let row = [], cur = '', q = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) {
+      if (c === '"' && text[i + 1] === '"') { cur += '"'; i++; }
+      else if (c === '"') q = false;
+      else cur += c;
+    } else if (c === '"') q = true;
+    else if (c === ',') { row.push(cur); cur = ''; }
+    else if (c === '\n') { row.push(cur); rows.push(row); row = []; cur = ''; }
+    else if (c !== '\r') cur += c;
+  }
+  if (cur !== '' || row.length) { row.push(cur); rows.push(row); }
+  return rows;
+}
+function readFileText(file) {
+  return file.arrayBuffer().then(buf => {
+    let t = new TextDecoder('utf-8').decode(buf);
+    if (t.includes('\uFFFD')) t = new TextDecoder('gbk').decode(buf);
+    return t.replace(/^\uFEFF/, '');
+  });
+}
+// Excel 日期序号 -> yyyy-mm-dd
+function normDate(v) {
+  if (v === null || v === undefined || v === '') return '';
+  if (typeof v === 'number') {
+    const d = new Date(Math.round((v - 25569) * 86400 * 1000));
+    return d.toISOString().slice(0, 10);
+  }
+  const m = String(v).match(/(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  if (m) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
+  return '';
+}
+const findIdx = (headers, keys) => headers.findIndex(h => keys.some(k => String(h).includes(k)));
+
+// ---------- 成本 ----------
+function renderCost() {
+  const q = $('costSearch').value.trim().toLowerCase();
+  const rows = Object.entries(S.costs).filter(([sku, c]) =>
+    !q || sku.toLowerCase().includes(q) || (c.name || '').toLowerCase().includes(q));
+  $('costBody').innerHTML = rows.map(([sku, c]) => `
+    <tr>
+      <td>${esc(sku)}</td><td>${esc(c.name)}</td>
+      <td class="num">${money(c.cost)}</td>
+      <td>${(c.deductions || []).map(d => `${esc(d.name)} ${d.rate}%`).join('、') || '<span class="muted">无</span>'}</td>
+      <td><button class="btn small" data-edit="${esc(sku)}">编辑</button>
+          <button class="btn small red" data-del="${esc(sku)}">删除</button></td>
+    </tr>`).join('') || '<tr><td colspan="5" class="muted">暂无成本数据，点击「新增 SKU」添加。</td></tr>';
+}
+let editing = null, draftDed = [];
+function openCostModal(sku) {
+  editing = sku;
+  const c = sku ? S.costs[sku] : { name: '', cost: 0, deductions: [] };
+  $('mTitle').textContent = sku ? '编辑 SKU' : '新增 SKU';
+  $('mSku').value = sku || ''; $('mSku').disabled = !!sku;
+  $('mName').value = c.name || ''; $('mCost').value = c.cost ?? 0;
+  draftDed = JSON.parse(JSON.stringify(c.deductions || []));
+  renderDed();
+  $('costModal').classList.add('show');
+}
+function renderDed() {
+  $('mDed').innerHTML = draftDed.map((d, i) => `
+    <tr><td><input value="${esc(d.name)}" data-i="${i}" data-f="name" size="20"></td>
+    <td class="num"><input type="number" step="0.001" value="${d.rate}" data-i="${i}" data-f="rate" style="width:90px"></td>
+    <td><button class="btn small red" data-rm="${i}">删除</button></td></tr>`).join('') || '<tr><td colspan="3" class="muted">暂无扣点项</td></tr>';
+  const total = draftDed.reduce((s, d) => s + n(d.rate), 0);
+  $('mTotal').textContent = `扣点合计：${total.toFixed(3)}%`;
+}
+$('mDed').addEventListener('input', e => {
+  const i = e.target.dataset.i, f = e.target.dataset.f;
+  if (i === undefined) return;
+  draftDed[i][f] = f === 'rate' ? n(e.target.value) : e.target.value;
+  renderDed();
+});
+$('mDed').addEventListener('click', e => {
+  if (e.target.dataset.rm !== undefined) { draftDed.splice(+e.target.dataset.rm, 1); renderDed(); }
+});
+$('dAdd').onclick = () => {
+  const name = $('dName').value.trim(), rate = n($('dRate').value);
+  if (!name) return toast('请填写扣点名称');
+  draftDed.push({ name, rate }); $('dName').value = ''; $('dRate').value = '';
+  renderDed();
+};
+$('mCancel').onclick = () => $('costModal').classList.remove('show');
+$('mSave').onclick = async () => {
+  const sku = editing || $('mSku').value.trim();
+  if (!sku) return toast('请填写 SKU');
+  if (!editing && S.costs[sku]) return toast('该 SKU 已存在');
+  S.costs[sku] = { name: $('mName').value.trim(), cost: n($('mCost').value), deductions: draftDed };
+  await saveCosts();
+  $('costModal').classList.remove('show');
+  renderCost();
+};
+$('costAdd').onclick = () => openCostModal(null);
+$('costSearch').oninput = renderCost;
+$('costBody').addEventListener('click', async e => {
+  const ed = e.target.dataset.edit, del = e.target.dataset.del;
+  if (ed) openCostModal(ed);
+  if (del && confirm(`删除 SKU ${del}？`)) { delete S.costs[del]; await saveCosts(); renderCost(); }
+});
+
+// ---------- 订单 ----------
+// 需要的字段通过关键字识别；其余列原样保存，可在「列管理」中隐藏
+const ORDER_KEYS = { no: ['订单号'], status: ['订单状态', '状态'], qty: ['商品数量', '数量'], sku: ['商家编码'], time: ['成交时间', '付款时间'], paid: ['商家实收'] };
+async function importOrders() {
+  const f = $('orderFile').files[0];
+  if (!f) return toast('请先选择 CSV 文件');
+  const rows = parseCsv(await readFileText(f)).filter(r => r.length > 1);
+  const headers = rows[0].map(h => h.trim());
+  const idx = {};
+  for (const [k, keys] of Object.entries(ORDER_KEYS)) idx[k] = findIdx(headers, keys);
+  const missing = Object.entries(idx).filter(([, v]) => v < 0).map(([k]) => k);
+  if (missing.length) return toast('缺少必要列：' + missing.join('、') + '\n请确认是订单导出 CSV');
+  let added = 0, updated = 0;
+  for (const r of rows.slice(1)) {
+    const no = (r[idx.no] || '').trim();
+    if (!no) continue;
+    const rec = {};
+    headers.forEach((h, i) => { if (h) rec[h] = (r[i] ?? '').trim(); });
+    rec.__no = no; rec.__status = (r[idx.status] || '').trim();
+    rec.__sku = (r[idx.sku] || '').trim(); rec.__qty = n(r[idx.qty]);
+    rec.__time = (r[idx.time] || '').trim(); rec.__paid = n(r[idx.paid]);
+    if (S.orders[no]) updated++; else added++;
+    S.orders[no] = rec;
+  }
+  const cols = headers.filter(h => h);
+  S.orderCols = [...new Set([...S.orderCols, ...cols])];
+  await Promise.all([saveOrders(), kvSet('orderCols', S.orderCols)]);
+  toast(`导入完成：新增 ${added} 条，更新 ${updated} 条（按订单号去重）`);
+  renderOrders();
+}
+function visibleCols() {
+  return S.orderCols.filter(c => !S.hiddenCols.includes(c));
+}
+function renderOrders() {
+  const cols = visibleCols();
+  const q = $('orderSearch').value.trim().toLowerCase();
+  const list = Object.values(S.orders).filter(o => !q || JSON.stringify(o).toLowerCase().includes(q));
+  $('orderHead').innerHTML = '<tr>' + cols.map(c => `<th>${esc(c)}</th>`).join('') + '</tr>';
+  $('orderBody').innerHTML = list.slice(0, 300).map(o =>
+    '<tr>' + cols.map(c => `<td>${esc(o[c])}</td>`).join('') + '</tr>').join('')
+    || `<tr><td colspan="${cols.length || 1}" class="muted">暂无订单</td></tr>`;
+  $('orderInfo').textContent = `共 ${list.length} 条订单（已隐藏 ${S.hiddenCols.length} 列）`;
+  $('colPanel').innerHTML = S.orderCols.map(c => `
+    <label style="display:inline-block;margin:4px 10px 4px 0">
+      <input type="checkbox" data-col="${esc(c)}" ${S.hiddenCols.includes(c) ? '' : 'checked'}> ${esc(c)}
+    </label>`).join('') || '<span class="muted">请先导入订单</span>';
+}
+$('orderImport').onclick = importOrders;
+$('orderSearch').oninput = renderOrders;
+$('colBtn').onclick = () => {
+  const p = $('colPanel'); p.style.display = p.style.display === 'none' ? 'block' : 'none';
+};
+$('colPanel').addEventListener('change', async e => {
+  const c = e.target.dataset.col; if (!c) return;
+  S.hiddenCols = e.target.checked ? S.hiddenCols.filter(x => x !== c) : [...S.hiddenCols, c];
+  await saveCols(); renderOrders();
+});
+
+// ---------- 推广 ----------
+async function importPromo() {
+  const f = $('promoFile').files[0];
+  if (!f) return toast('请先选择推广文件');
+  const buf = await f.arrayBuffer();
+  const wb = XLSX.read(buf, { type: 'array', cellDates: false });
+  let added = 0;
+  for (const sn of wb.SheetNames) {
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, defval: '' });
+    const hIdx = rows.findIndex(r => r.some(c => String(c).includes('总花费')));
+    if (hIdx < 0) continue;
+    const h = rows[hIdx].map(x => String(x).trim());
+    const dCol = findIdx(h, ['日期']) >= 0 ? findIdx(h, ['日期']) : 0;
+    const spendCol = findIdx(h, ['总花费']);
+    const itemCol = findIdx(h, ['商品ID', '商品id', 'ID']);
+    for (const r of rows.slice(hIdx + 1)) {
+      const d = normDate(r[dCol]);
+      if (!d) continue;
+      const spend = n(r[spendCol]);
+      const key = d + '|' + (itemCol >= 0 ? String(r[itemCol]).trim() : '');
+      S.promo[key] = { date: d, item: itemCol >= 0 ? String(r[itemCol]).trim() : '', spend, source: f.name + '/' + sn };
+      added++;
+    }
+  }
+  if (!added) return toast('未找到包含「日期」和「总花费」列的数据');
+  await savePromo();
+  toast(`推广导入完成：${added} 条`);
+  renderPromo();
+}
+function renderPromo() {
+  const list = Object.values(S.promo).sort((a, b) => b.date.localeCompare(a.date));
+  $('promoBody').innerHTML = list.slice(0, 1000).map(p => `
+    <tr><td>${p.date}</td><td>${esc(p.item)}</td><td class="num">${money(p.spend)}</td>
+    <td class="muted">${esc(p.source)}</td>
+    <td><button class="btn small red" data-pdel="${esc(p.date + '|' + p.item)}">删除</button></td></tr>`).join('')
+    || '<tr><td colspan="5" class="muted">暂无推广数据</td></tr>';
+}
+$('promoImport').onclick = importPromo;
+$('promoClear').onclick = async () => { if (confirm('清空全部推广数据？')) { S.promo = {}; await savePromo(); renderPromo(); } };
+$('promoBody').addEventListener('click', async e => {
+  const k = e.target.dataset.pdel;
+  if (k) { delete S.promo[k]; await savePromo(); renderPromo(); }
+});
+
+// ---------- 盈亏 ----------
+function calcOrder(o) {
+  const c = S.costs[o.__sku];
+  const cost = c ? c.cost * (o.__qty || 1) : 0;
+  const rate = c ? (c.deductions || []).reduce((s, d) => s + n(d.rate), 0) : 0;
+  const settle = o.__paid * (1 - rate / 100);
+  const refund = settle * S.settings.refund / 100;
+  const tax = settle * S.settings.tax / 100;
+  const deduct = o.__paid * rate / 100;
+  return { paid: o.__paid, deduct, cost, refundTax: refund + tax, settle, profit: settle - cost - refund - tax, missing: !c };
+}
+const VALID = o => !/退款|取消|待付款|未付款/.test(o.__status) && o.__time;
+function runProfit() {
+  const s = $('pStart').value, e = $('pEnd').value || s;
+  if (!s) return toast('请选择开始日期');
+  const days = {}, missing = new Set();
+  let skippedNoTime = 0, skippedStatus = 0;
+  for (const o of Object.values(S.orders)) {
+    if (!VALID(o)) { if (!o.__time) skippedNoTime++; else skippedStatus++; continue; }
+    const d = o.__time.slice(0, 10);
+    if (d < s || d > e) continue;
+    const r = calcOrder(o);
+    if (r.missing) missing.add(o.__sku || '(无 SKU)');
+    const x = days[d] || (days[d] = { count: 0, paid: 0, deduct: 0, cost: 0, refundTax: 0, promo: 0, profit: 0 });
+    x.count++; x.paid += r.paid; x.deduct += r.deduct; x.cost += r.cost; x.refundTax += r.refundTax; x.profit += r.profit;
+  }
+  for (const p of Object.values(S.promo)) {
+    if (p.date < s || p.date > e) continue;
+    const x = days[p.date] || (days[p.date] = { count: 0, paid: 0, deduct: 0, cost: 0, refundTax: 0, promo: 0, profit: 0 });
+    x.promo += p.spend;
+  }
+  const keys = Object.keys(days).sort();
+  const tot = { count: 0, paid: 0, deduct: 0, cost: 0, refundTax: 0, promo: 0, profit: 0 };
+  let rowsHtml = '';
+  for (const d of keys) {
+    const x = days[d]; x.profit -= x.promo;
+    for (const k in tot) tot[k] += x[k];
+    rowsHtml += `<tr><td>${d}</td><td class="num">${x.count}</td><td class="num">${money(x.paid)}</td>
+      <td class="num">${money(x.deduct)}</td><td class="num">${money(x.cost)}</td>
+      <td class="num">${money(x.refundTax)}</td><td class="num">${money(x.promo)}</td>
+      <td class="num ${cls(x.profit)}">${money(x.profit)}</td></tr>`;
+  }
+  $('profitBody').innerHTML = rowsHtml || '<tr><td colspan="8" class="muted">该时间段没有数据</td></tr>';
+  if (keys.length) rowsHtml += '';
+  $('profitBody').innerHTML += keys.length ? `<tr class="total"><td>合计</td><td class="num">${tot.count}</td>
+    <td class="num">${money(tot.paid)}</td><td class="num">${money(tot.deduct)}</td><td class="num">${money(tot.cost)}</td>
+    <td class="num">${money(tot.refundTax)}</td><td class="num">${money(tot.promo)}</td>
+    <td class="num ${cls(tot.profit)}">${money(tot.profit)}</td></tr>` : '';
+  $('pSummary').innerHTML = `<b>${s}${e !== s ? ' 至 ' + e : ''}</b>：净利润 <span class="${cls(tot.profit)}" style="font-size:20px">${money(tot.profit)}</span> 元，
+    订单 ${tot.count} 单，销售额 ${money(tot.paid)} 元，推广花费 ${money(tot.promo)} 元`;
+  const warns = [];
+  if (missing.size) warns.push(`以下 SKU 缺少成本或未设置，按 0 成本计算，请到「成本」页面补录：${[...missing].slice(0, 30).join('、')}${missing.size > 30 ? '…' : ''}`);
+  if (skippedNoTime) warns.push(`有 ${skippedNoTime} 条订单缺少成交时间，已跳过。`);
+  $('pWarn').innerHTML = warns.map(w => `<div class="warn">${esc(w)}</div>`).join('');
+}
+$('pQuery').onclick = runProfit;
+$('pToday').onclick = () => { $('pEnd').value = $('pStart').value; runProfit(); };
+
+// ---------- 设置 / 备份 ----------
+function renderSettings() {
+  $('setRefund').value = S.settings.refund; $('setTax').value = S.settings.tax;
+}
+$('setSave').onclick = async () => {
+  S.settings = { refund: n($('setRefund').value), tax: n($('setTax').value) };
+  await saveSettings(); toast('已保存');
+};
+$('exportBtn').onclick = () => {
+  const blob = new Blob([JSON.stringify({ costs: S.costs, orders: S.orders, promo: S.promo, settings: S.settings, hiddenCols: S.hiddenCols, orderCols: S.orderCols }, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = 'order-profit-backup-' + new Date().toISOString().slice(0, 10) + '.json'; a.click();
+};
+$('importBackup').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  const j = JSON.parse(await f.text());
+  Object.assign(S, { costs: j.costs || {}, orders: j.orders || {}, promo: j.promo || {}, settings: j.settings || S.settings, hiddenCols: j.hiddenCols || [], orderCols: j.orderCols || [] });
+  await Promise.all([saveCosts(), saveOrders(), savePromo(), saveSettings(), saveCols(), kvSet('orderCols', S.orderCols)]);
+  toast('备份已恢复'); renderAll();
+};
+$('clearAll').onclick = async () => {
+  if (!confirm('确认清空全部数据？此操作不可恢复。')) return;
+  Object.assign(S, { costs: {}, orders: {}, promo: {}, settings: { refund: 1, tax: 1 }, hiddenCols: [], orderCols: [] });
+  await Promise.all([saveCosts(), saveOrders(), savePromo(), saveSettings(), saveCols(), kvSet('orderCols', [])]);
+  renderAll();
+};
+
+// ---------- 导航 ----------
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('active', x === b));
+  document.querySelectorAll('section').forEach(s => s.classList.toggle('active', s.id === b.dataset.tab));
+});
+function renderAll() { renderCost(); renderOrders(); renderPromo(); renderSettings(); }
+(async () => {
+  await loadAll();
+  const today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+  $('pStart').value = today; $('pEnd').value = today;
+  renderAll();
+})();
+</script>
+</body>
+</html>
