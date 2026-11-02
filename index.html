@@ -94,6 +94,7 @@
     <p class="muted">支持平台导出的「导出商品库存」表（xlsx 或 csv）。读取：商品ID、商品名称、SKUID、规格名称、规格编码（即商家编码，与订单和成本表的 SKU 对应）。「库存增减」列会被忽略。同一 SKUID 重复导入会更新。</p>
     <div class="bar">
       <input type="file" id="imFile" accept=".xlsx,.xls,.csv">
+      <label>归属店铺 <input id="imShop" size="16" placeholder="如 彩桐纸品旗舰店"></label>
       <button class="btn" id="imImport">导入</button>
       <button class="btn red" id="imClear">清空全部</button>
     </div>
@@ -107,18 +108,20 @@
       <label>规格编码(商家编码) <input id="imSku" size="14"></label>
       <label>规格名称 <input id="imSpec" size="20"></label>
       <label>商品名称 <input id="imName" size="28"></label>
+      <label>店铺 <input id="imShopEdit" size="16"></label>
       <button class="btn" id="imSave">保存</button>
       <button class="btn gray" id="imReset">清空表单</button>
     </div>
   </div>
   <div class="bar">
     <input id="imSearch" placeholder="搜索商品ID / SKUID / 规格编码 / 名称" size="34">
+    <select id="imShopFilter"><option value="">全部店铺</option></select>
     <select id="imFilter"><option value="all">全部</option><option value="nosku">缺少规格编码</option></select>
     <span class="muted" id="imInfo"></span>
   </div>
   <div class="wrap">
     <table>
-      <thead><tr><th>商品ID</th><th>SKUID</th><th>规格编码(商家编码)</th><th>规格名称</th><th>商品名称</th><th>操作</th></tr></thead>
+      <thead><tr><th>店铺</th><th>商品ID</th><th>SKUID</th><th>规格编码(商家编码)</th><th>规格名称</th><th>商品名称</th><th>操作</th></tr></thead>
       <tbody id="imBody"></tbody>
     </table>
   </div>
@@ -404,7 +407,7 @@ S.itemMap = {};   // key: sku_id -> { id, item_id, sku_id, sku, spec, name }
 async function loadItemMap() {
   const rows = await fetchAll('item_map');
   S.itemMap = {};
-  rows.forEach(r => S.itemMap[r.sku_id] = { item_id: r.item_id || '', sku_id: r.sku_id, sku: r.sku || '', spec: r.spec || '', name: r.name || '' });
+  rows.forEach(r => S.itemMap[r.sku_id] = { item_id: r.item_id || '', sku_id: r.sku_id, sku: r.sku || '', spec: r.spec || '', name: r.name || '', shop: r.shop || '' });
 }
 const normId = v => typeof v === 'number' ? String(Math.round(v)) : String(v ?? '').trim().replace(/\.0+$/, '');
 const findIdxCI = (headers, keys) => headers.findIndex(h => keys.some(k => h.toLowerCase().includes(k.toLowerCase())));
@@ -428,6 +431,7 @@ function importItemMap() {
     const iSpec = findIdxCI(h, ['规格名称']);
     const iCode = findIdxCI(h, ['规格编码', '商家编码']);
     if (iItem < 0 || iSkuId < 0) return toast('未找到「商品ID」或「SKUID」列，请确认是「导出商品库存」表');
+    const shopName = $('imShop').value.trim();
     const byKey = {};
     for (const r of rows.slice(1)) {
       const sku_id = normId(r[iSkuId]);
@@ -438,13 +442,14 @@ function importItemMap() {
         sku_id,
         sku: iCode >= 0 ? String(r[iCode] ?? '').trim() : '',
         spec: iSpec >= 0 ? String(r[iSpec] ?? '').trim() : '',
-        name: iName >= 0 ? String(r[iName] ?? '').trim() : ''
+        name: iName >= 0 ? String(r[iName] ?? '').trim() : '',
+        shop: shopName || (S.itemMap[sku_id]?.shop ?? '')
       };
     }
     const dbRows = Object.values(byKey);
     if (!dbRows.length) return toast('没有读取到有效的 SKUID');
     await upsertChunks('item_map', dbRows, 'user_id,sku_id');
-    dbRows.forEach(r => S.itemMap[r.sku_id] = { item_id: r.item_id, sku_id: r.sku_id, sku: r.sku, spec: r.spec, name: r.name });
+    dbRows.forEach(r => S.itemMap[r.sku_id] = { item_id: r.item_id, sku_id: r.sku_id, sku: r.sku, spec: r.spec, name: r.name, shop: r.shop });
     toast(`导入完成：${dbRows.length} 条 SKUID 已保存到云端（同 SKUID 自动更新）`);
     renderItemMap();
   });
@@ -452,38 +457,48 @@ function importItemMap() {
 function renderItemMap() {
   const q = $('imSearch').value.trim().toLowerCase();
   const onlyMissing = $('imFilter').value === 'nosku';
+  const shopSel = $('imShopFilter');
+  const shops = [...new Set(Object.values(S.itemMap).map(r => r.shop).filter(Boolean))].sort();
+  const curShop = shopSel.value;
+  shopSel.innerHTML = '<option value="">全部店铺</option>' + shops.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
+  shopSel.value = shops.includes(curShop) ? curShop : '';
+  const shopF = shopSel.value;
   const all = Object.values(S.itemMap);
   const list = all.filter(r =>
     (!onlyMissing || !r.sku) &&
-    (!q || (r.item_id + r.sku_id + r.sku + r.spec + r.name).toLowerCase().includes(q)));
+    (!shopF || r.shop === shopF) &&
+    (!q || (r.shop + r.item_id + r.sku_id + r.sku + r.spec + r.name).toLowerCase().includes(q)));
   $('imBody').innerHTML = list.slice(0, 500).map(r => `
-    <tr${r.sku ? '' : ' style="background:#fff8e1"'}><td>${esc(r.item_id)}</td><td>${esc(r.sku_id)}</td>
+    <tr${r.sku ? '' : ' style="background:#fff8e1"'}><td>${esc(r.shop) || '<span class="muted">未设置</span>'}</td>
+    <td>${esc(r.item_id)}</td><td>${esc(r.sku_id)}</td>
     <td>${esc(r.sku) || '<span class="muted">缺少</span>'}</td><td>${esc(r.spec)}</td><td>${esc(r.name)}</td>
     <td><button class="btn small" data-imedit="${esc(r.sku_id)}">编辑</button>
         <button class="btn small red" data-imdel="${esc(r.sku_id)}">删除</button></td></tr>`).join('')
-    || '<tr><td colspan="6" class="muted">暂无数据，请导入或手动新增。</td></tr>';
+    || '<tr><td colspan="7" class="muted">暂无数据，请导入或手动新增。</td></tr>';
   const items = new Set(all.map(r => r.item_id)).size;
   const missing = all.filter(r => !r.sku).length;
-  $('imStats').innerHTML = `<span>商品ID：<b>${items}</b></span>&nbsp;&nbsp;<span>SKUID：<b>${all.length}</b></span>&nbsp;&nbsp;<span class="${missing ? 'neg' : ''}">缺少规格编码：<b>${missing}</b></span>`;
+  const noShop = all.filter(r => !r.shop).length;
+  $('imStats').innerHTML = `<span>店铺：<b>${shops.length}</b></span>&nbsp;&nbsp;<span>商品ID：<b>${items}</b></span>&nbsp;&nbsp;<span>SKUID：<b>${all.length}</b></span>&nbsp;&nbsp;<span class="${missing ? 'neg' : ''}">缺少规格编码：<b>${missing}</b></span>&nbsp;&nbsp;<span class="${noShop ? 'neg' : ''}">未设置店铺：<b>${noShop}</b></span>`;
   $('imInfo').textContent = `显示 ${list.length} 条`;
 }
 function clearItemForm() {
-  ['imItem', 'imSkuId', 'imSku', 'imSpec', 'imName'].forEach(id => $(id).value = '');
+  ['imItem', 'imSkuId', 'imSku', 'imSpec', 'imName', 'imShopEdit'].forEach(id => $(id).value = '');
   $('imSkuId').disabled = false;
 }
 $('imImport').onclick = importItemMap;
 $('imSearch').oninput = renderItemMap;
 $('imFilter').onchange = renderItemMap;
+$('imShopFilter').onchange = renderItemMap;
 $('imReset').onclick = clearItemForm;
 $('imSave').onclick = () => run(async () => {
   const sku_id = normId($('imSkuId').value);
   const item_id = normId($('imItem').value);
   if (!sku_id) return toast('请填写 SKUID');
   if (!item_id) return toast('请填写商品ID');
-  const row = { user_id: UID, item_id, sku_id, sku: $('imSku').value.trim(), spec: $('imSpec').value.trim(), name: $('imName').value.trim() };
+  const row = { user_id: UID, item_id, sku_id, sku: $('imSku').value.trim(), spec: $('imSpec').value.trim(), name: $('imName').value.trim(), shop: $('imShopEdit').value.trim() };
   const { error } = await sb.from('item_map').upsert(row, { onConflict: 'user_id,sku_id' });
   if (error) throw error;
-  S.itemMap[sku_id] = { item_id, sku_id, sku: row.sku, spec: row.spec, name: row.name };
+  S.itemMap[sku_id] = { item_id, sku_id, sku: row.sku, spec: row.spec, name: row.name, shop: row.shop };
   clearItemForm(); renderItemMap();
 });
 $('imBody').addEventListener('click', e => run(async () => {
@@ -491,7 +506,7 @@ $('imBody').addEventListener('click', e => run(async () => {
   if (ed) {
     const r = S.itemMap[ed];
     $('imItem').value = r.item_id; $('imSkuId').value = r.sku_id; $('imSkuId').disabled = true;
-    $('imSku').value = r.sku; $('imSpec').value = r.spec; $('imName').value = r.name;
+    $('imSku').value = r.sku; $('imSpec').value = r.spec; $('imName').value = r.name; $('imShopEdit').value = r.shop || '';
     window.scrollTo(0, 0);
   }
   if (del && confirm(`删除 SKUID ${del}？`)) {
