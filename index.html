@@ -74,17 +74,33 @@
 
 <!-- 成本 -->
 <section id="cost" class="active">
+  <div class="card">
+    <h3>导入规格编码与产品价格</h3>
+    <p class="muted">表格需包含：规格编码（或商家编码）、价格（作为产品成本）；可选：活动成本。同一规格编码重复导入会更新。</p>
+    <div class="bar">
+      <input type="file" id="costFile" accept=".xlsx,.xls,.csv">
+      <button class="btn" id="costImport">导入</button>
+      <button class="btn gray" id="costSync">从商品ID页同步规格编码</button>
+    </div>
+  </div>
+  <div class="card">
+    <h3>手动新增 / 修改</h3>
+    <div class="bar">
+      <label>规格编码 <input id="cNew" size="18"></label>
+      <label>产品成本(元) <input id="cNewCost" type="number" step="0.01" size="10"></label>
+      <label>活动成本(元) <input id="cNewAct" type="number" step="0.01" size="10"></label>
+      <button class="btn" id="costAdd">保存</button>
+    </div>
+  </div>
   <div class="bar">
-    <input id="costSearch" placeholder="搜索规格编码 / 名称" size="24">
+    <input id="costSearch" placeholder="搜索规格编码" size="24">
     <select id="costFilter"><option value="all">全部</option><option value="nocost">产品成本为 0</option></select>
-    <button class="btn" id="costSync">从商品ID页同步规格编码</button>
-    <button class="btn gray" id="costAdd">手动新增</button>
     <span class="muted" id="costInfo"></span>
   </div>
-  <p class="muted">成本金额可直接在表格中修改，失焦或回车即自动保存。扣点项点击「编辑」增删改。同一规格编码只保留一条。</p>
+  <p class="muted">成本金额可直接在表格中修改，失焦或回车即自动保存。</p>
   <div class="wrap">
     <table>
-      <thead><tr><th>商品规格编码</th><th>商品名称</th><th class="num">产品成本(元)</th><th class="num">活动成本(元)</th><th>扣点合计</th><th>扣点项</th><th>操作</th></tr></thead>
+      <thead><tr><th>商品规格编码</th><th class="num">产品成本(元)</th><th class="num">活动成本(元)</th><th>操作</th></tr></thead>
       <tbody id="costBody"></tbody>
     </table>
   </div>
@@ -342,17 +358,13 @@ function renderCost() {
   const rows = all.filter(([sku, c]) =>
     (!onlyNoCost || !c.cost) &&
     (!q || sku.toLowerCase().includes(q) || (c.name || '').toLowerCase().includes(q)));
-  const rateOf = c => (c.deductions || []).reduce((s, d) => s + n(d.rate), 0);
   $('costBody').innerHTML = rows.map(([sku, c]) => `
     <tr>
-      <td>${esc(sku)}</td><td>${esc(c.name)}</td>
-      <td class="num"><input type="number" step="0.01" class="cin" value="${c.cost}" data-cf="cost" data-sku="${esc(sku)}" style="width:100px;text-align:right"></td>
-      <td class="num"><input type="number" step="0.01" class="cin" value="${c.activity}" data-cf="activity" data-sku="${esc(sku)}" style="width:100px;text-align:right"></td>
-      <td class="num">${rateOf(c).toFixed(3)}%</td>
-      <td>${(c.deductions || []).map(d => `${esc(d.name)} ${d.rate}%`).join('、') || '<span class="muted">无</span>'}</td>
-      <td><button class="btn small" data-edit="${esc(sku)}">编辑扣点</button>
-          <button class="btn small red" data-del="${esc(sku)}">删除</button></td>
-    </tr>`).join('') || '<tr><td colspan="7" class="muted">暂无成本数据，请点击「从商品ID页同步规格编码」。</td></tr>';
+      <td>${esc(sku)}</td>
+      <td class="num"><input type="number" step="0.01" class="cin" value="${c.cost}" data-cf="cost" data-sku="${esc(sku)}" style="width:110px;text-align:right"></td>
+      <td class="num"><input type="number" step="0.01" class="cin" value="${c.activity}" data-cf="activity" data-sku="${esc(sku)}" style="width:110px;text-align:right"></td>
+      <td><button class="btn small red" data-del="${esc(sku)}">删除</button></td>
+    </tr>`).join('') || '<tr><td colspan="4" class="muted">暂无成本数据，请导入规格编码和价格，或从商品ID页同步。</td></tr>';
   $('costInfo').textContent = `共 ${all.length} 个规格编码，显示 ${rows.length} 条`;
 }
 // 从商品ID页读取规格编码，写入成本表；已存在的不重复添加
@@ -384,6 +396,43 @@ $('costBody').addEventListener('change', e => {
   run(() => saveCostRow(sku).then(() => toast('已保存')));
 });
 $('costSync').onclick = () => run(syncCostsFromItems);
+// 导入：规格编码 + 价格(产品成本) + 可选活动成本；保留已有的扣点与名称
+$('costImport').onclick = () => run(async () => {
+  const f = $('costFile').files[0];
+  if (!f) return toast('请先选择文件');
+  let rows;
+  if (/\.csv$/i.test(f.name)) rows = parseCsv(await readFileText(f));
+  else {
+    const wb = XLSX.read(await f.arrayBuffer(), { type: 'array' });
+    rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' });
+  }
+  rows = rows.filter(r => r.some(c => String(c).trim() !== ''));
+  const h = rows[0].map(x => String(x).trim());
+  const iCode = findIdxCI(h, ['规格编码', '商家编码']);
+  const iPrice = h.findIndex(x => ['价格', '产品成本'].includes(x)) >= 0
+    ? h.findIndex(x => ['价格', '产品成本'].includes(x)) : h.findIndex(x => x.includes('成本') && !x.includes('活动'));
+  const iAct = findIdxCI(h, ['活动成本']);
+  if (iCode < 0 || iPrice < 0) return toast('未找到「规格编码」或「价格」列，请检查表头');
+  const dbRows = [];
+  for (const r of rows.slice(1)) {
+    const sku = normId(r[iCode]);
+    if (!sku) continue;
+    const prev = S.costs[sku] || {};
+    const row = {
+      user_id: UID, sku,
+      name: prev.name || '',
+      cost: n(r[iPrice]),
+      activity_cost: iAct >= 0 && String(r[iAct]).trim() !== '' ? n(r[iAct]) : (prev.activity || 0),
+      deductions: prev.deductions || []
+    };
+    dbRows.push(row);
+  }
+  if (!dbRows.length) return toast('没有读取到有效的规格编码');
+  await upsertChunks('costs', dbRows, 'user_id,sku');
+  dbRows.forEach(r => S.costs[r.sku] = { name: r.name, cost: r.cost, activity: r.activity_cost, deductions: r.deductions });
+  toast(`导入完成：${dbRows.length} 条已保存（同规格编码自动更新）`);
+  renderCost();
+});
 $('costFilter').onchange = renderCost;
 let editing = null, draftDed = [];
 function openCostModal(sku) {
@@ -429,7 +478,15 @@ $('mSave').onclick = () => run(async () => {
   $('costModal').classList.remove('show');
   renderCost();
 });
-$('costAdd').onclick = () => openCostModal(null);
+$('costAdd').onclick = () => run(async () => {
+  const sku = normId($('cNew').value);
+  if (!sku) return toast('请填写规格编码');
+  const prev = S.costs[sku] || {};
+  S.costs[sku] = { name: prev.name || '', cost: n($('cNewCost').value), activity: n($('cNewAct').value), deductions: prev.deductions || [] };
+  await saveCostRow(sku);
+  $('cNew').value = ''; $('cNewCost').value = ''; $('cNewAct').value = '';
+  renderCost();
+});
 $('costSearch').oninput = renderCost;
 $('costBody').addEventListener('click', e => run(async () => {
   const ed = e.target.dataset.edit, del = e.target.dataset.del;
