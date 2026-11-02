@@ -172,11 +172,13 @@
     <input type="file" id="promoFile" accept=".xlsx,.xls,.csv">
     <button class="btn" id="promoImport">导入推广表</button>
     <button class="btn red" id="promoClear">清空推广数据</button>
-    <span class="muted">按「日期」和「总花费(元)」列汇总，同一天同一商品多次导入会覆盖。</span>
+    <input id="promoSearch" placeholder="搜索商品ID" size="18">
+    <span class="muted" id="promoInfo"></span>
   </div>
+  <p class="muted">导入「商品推广_分天数据」表：读取商品ID、日期、成交花费(元)、交易额(元)。同一天同一商品的多条推广记录会自动相加；重复导入同一天同一商品会覆盖。</p>
   <div class="wrap">
     <table>
-      <thead><tr><th>日期</th><th>商品ID</th><th class="num">总花费(元)</th><th>来源</th><th>操作</th></tr></thead>
+      <thead><tr><th>商品ID</th><th>日期</th><th class="num">成交花费(元)</th><th class="num">交易额(元)</th><th>操作</th></tr></thead>
       <tbody id="promoBody"></tbody>
     </table>
   </div>
@@ -285,7 +287,7 @@ async function loadAll() {
   S.promo = {};
   promo.forEach(p => {
     const d = String(p.promo_date);
-    S.promo[d + '|' + p.item] = { date: d, item: p.item, spend: Number(p.spend) || 0, source: p.source || '' };
+    S.promo[d + '|' + p.item] = { date: d, item: p.item, spend: Number(p.spend) || 0, gmv: Number(p.gmv) || 0, source: p.source || '' };
   });
   if (settings.data) {
     const s = settings.data;
@@ -718,39 +720,50 @@ function importPromo() {
     const f = $('promoFile').files[0];
     if (!f) return toast('请先选择推广文件');
     const wb = XLSX.read(await f.arrayBuffer(), { type: 'array' });
-    const dbRows = [];
+    const agg = {};
     for (const sn of wb.SheetNames) {
       const rows = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, defval: '' });
-      const hIdx = rows.findIndex(r => r.some(c => String(c).includes('总花费')));
+      const hIdx = rows.findIndex(r => r.some(c => String(c).includes('商品ID')));
       if (hIdx < 0) continue;
       const h = rows[hIdx].map(x => String(x).trim());
-      const dCol = Math.max(findIdx(h, ['日期']), 0);
-      const spendCol = findIdx(h, ['总花费']);
-      const itemCol = findIdx(h, ['商品ID', '商品id', 'ID']);
+      const dCol = findIdxCI(h, ['日期']);
+      const iItem = findIdxCI(h, ['商品ID']);
+      const iSpend = findIdxCI(h, ['成交花费']);
+      const iGmv = findIdxCI(h, ['交易额']);
+      if (dCol < 0 || iSpend < 0) continue;
       for (const r of rows.slice(hIdx + 1)) {
         const d = normDate(r[dCol]);
-        if (!d) continue;
-        const item = itemCol >= 0 ? String(r[itemCol]).trim() : '';
-        const spend = n(r[spendCol]);
-        const source = f.name + '/' + sn;
-        dbRows.push({ user_id: UID, promo_date: d, item, spend, source });
-        S.promo[d + '|' + item] = { date: d, item, spend, source };
+        const item = normId(r[iItem]);
+        if (!d || !item) continue;
+        const key = d + '|' + item;
+        if (!agg[key]) agg[key] = { user_id: UID, promo_date: d, item, spend: 0, gmv: 0, source: f.name + '/' + sn };
+        agg[key].spend += n(r[iSpend]);
+        if (iGmv >= 0) agg[key].gmv += n(r[iGmv]);
       }
     }
-    if (!dbRows.length) return toast('未找到包含「日期」和「总花费」列的数据');
+    const dbRows = Object.values(agg).map(r => ({ ...r, spend: Math.round(r.spend * 100) / 100, gmv: Math.round(r.gmv * 100) / 100 }));
+    if (!dbRows.length) return toast('未找到包含「日期」「商品ID」「成交花费」列的数据');
     await upsertChunks('promo', dbRows, 'user_id,promo_date,item');
-    toast(`推广导入完成：${dbRows.length} 条已保存到云端`);
+    dbRows.forEach(r => S.promo[r.promo_date + '|' + r.item] = { date: r.promo_date, item: r.item, spend: r.spend, gmv: r.gmv, source: r.source });
+    toast(`推广导入完成：${dbRows.length} 条（已按日期+商品ID汇总）`);
     renderPromo();
   });
 }
 function renderPromo() {
-  const list = Object.values(S.promo).sort((a, b) => b.date.localeCompare(a.date));
+  const q = $('promoSearch').value.trim().toLowerCase();
+  const list = Object.values(S.promo)
+    .filter(p => !q || p.item.toLowerCase().includes(q))
+    .sort((a, b) => b.date.localeCompare(a.date) || a.item.localeCompare(b.item));
+  let spendSum = 0, gmvSum = 0;
+  list.forEach(p => { spendSum += p.spend; gmvSum += p.gmv || 0; });
   $('promoBody').innerHTML = list.slice(0, 1000).map(p => `
-    <tr><td>${p.date}</td><td>${esc(p.item)}</td><td class="num">${money(p.spend)}</td>
-    <td class="muted">${esc(p.source)}</td>
+    <tr><td>${esc(p.item)}</td><td>${p.date}</td><td class="num">${money(p.spend)}</td>
+    <td class="num">${money(p.gmv || 0)}</td>
     <td><button class="btn small red" data-pd="${esc(p.date)}" data-pi="${esc(p.item)}">删除</button></td></tr>`).join('')
     || '<tr><td colspan="5" class="muted">暂无推广数据</td></tr>';
+  $('promoInfo').textContent = `共 ${list.length} 条，成交花费合计 ${money(spendSum)} 元，交易额合计 ${money(gmvSum)} 元`;
 }
+$('promoSearch').oninput = renderPromo;
 $('promoImport').onclick = importPromo;
 $('promoClear').onclick = () => run(async () => {
   if (!confirm('清空全部推广数据？')) return;
