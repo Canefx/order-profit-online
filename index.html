@@ -95,6 +95,7 @@
   <div class="bar">
     <input id="costSearch" placeholder="搜索规格编码" size="24">
     <select id="costFilter"><option value="all">全部</option><option value="nocost">产品成本为 0</option></select>
+    <button class="btn gray" id="costExport">导出成本表(xlsx)</button>
     <span class="muted" id="costInfo"></span>
   </div>
   <p class="muted">成本金额可直接在表格中修改，失焦或回车即自动保存。</p>
@@ -358,13 +359,24 @@ function renderCost() {
   const rows = all.filter(([sku, c]) =>
     (!onlyNoCost || !c.cost) &&
     (!q || sku.toLowerCase().includes(q) || (c.name || '').toLowerCase().includes(q)));
-  $('costBody').innerHTML = rows.map(([sku, c]) => `
+  $('costBody').innerHTML = rows.map(([sku, c]) => {
+    if (S.editing === sku) return `
+    <tr style="background:#f0f7ff">
+      <td>${esc(sku)}</td>
+      <td class="num"><input type="number" step="0.01" class="cin" value="${c.cost}" data-cf="cost" style="width:110px;text-align:right"></td>
+      <td class="num"><input type="number" step="0.01" class="cin" value="${c.activity}" data-cf="activity" style="width:110px;text-align:right"></td>
+      <td><button class="btn small" data-save="${esc(sku)}">保存</button>
+          <button class="btn small gray" data-cancel="${esc(sku)}">取消</button></td>
+    </tr>`;
+    return `
     <tr>
       <td>${esc(sku)}</td>
-      <td class="num"><input type="number" step="0.01" class="cin" value="${c.cost}" data-cf="cost" data-sku="${esc(sku)}" style="width:110px;text-align:right"></td>
-      <td class="num"><input type="number" step="0.01" class="cin" value="${c.activity}" data-cf="activity" data-sku="${esc(sku)}" style="width:110px;text-align:right"></td>
-      <td><button class="btn small red" data-del="${esc(sku)}">删除</button></td>
-    </tr>`).join('') || '<tr><td colspan="4" class="muted">暂无成本数据，请导入规格编码和价格，或从商品ID页同步。</td></tr>';
+      <td class="num">${money(c.cost)}</td>
+      <td class="num">${money(c.activity)}</td>
+      <td><button class="btn small" data-edit="${esc(sku)}">编辑</button>
+          <button class="btn small red" data-del="${esc(sku)}">删除</button></td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="4" class="muted">暂无成本数据，请导入规格编码和价格，或从商品ID页同步。</td></tr>';
   $('costInfo').textContent = `共 ${all.length} 个规格编码，显示 ${rows.length} 条`;
 }
 // 从商品ID页读取规格编码，写入成本表；已存在的不重复添加
@@ -389,12 +401,34 @@ async function saveCostRow(sku) {
   const { error } = await sb.from('costs').upsert(row, { onConflict: 'user_id,sku' });
   if (error) throw error;
 }
-$('costBody').addEventListener('change', e => {
-  const f = e.target.dataset.cf; if (!f) return;
-  const sku = e.target.dataset.sku;
-  S.costs[sku][f === 'cost' ? 'cost' : 'activity'] = n(e.target.value);
-  run(() => saveCostRow(sku).then(() => toast('已保存')));
+// 默认只读；点「编辑」后才可修改，「保存」写入云端，「取消」放弃修改
+$('costBody').addEventListener('click', e => {
+  const d = e.target.dataset;
+  if (d.edit) { S.editing = d.edit; renderCost(); return; }
+  if (d.cancel) { S.editing = null; renderCost(); return; }
+  if (d.save) {
+    const sku = d.save;
+    const tr = e.target.closest('tr');
+    const cost = n(tr.querySelector('input[data-cf="cost"]').value);
+    const activity = n(tr.querySelector('input[data-cf="activity"]').value);
+    run(async () => {
+      S.costs[sku].cost = cost; S.costs[sku].activity = activity;
+      await saveCostRow(sku);
+      S.editing = null;
+      renderCost();
+      toast('已保存');
+    });
+  }
 });
+$('costExport').onclick = () => {
+  const rows = Object.entries(S.costs).sort(([a], [b]) => a.localeCompare(b))
+    .map(([sku, c]) => [sku, c.cost, c.activity]);
+  const aoa = [['商品规格编码', '产品成本(元)', '活动成本(元)'], ...rows];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), '成本表');
+  const date = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+  XLSX.writeFile(wb, `成本表_${date}.xlsx`);
+};
 $('costSync').onclick = () => run(syncCostsFromItems);
 // 导入：规格编码 + 价格(产品成本) + 可选活动成本；保留已有的扣点与名称
 $('costImport').onclick = () => run(async () => {
